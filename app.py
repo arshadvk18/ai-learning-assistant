@@ -1,4 +1,4 @@
-# app.py
+# app.py - Fixed version with proper CORS and error handling
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
@@ -11,22 +11,35 @@ import re
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend communication
+
+# Enhanced CORS configuration
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["*"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # Configure Gemini API
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is required")
+    print("Warning: GEMINI_API_KEY not found. Using fallback mode.")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
 class LearningPathGenerator:
     def __init__(self):
-        self.model = model
+        self.model = model if GEMINI_API_KEY else None
     
     def generate_learning_path(self, topic, level, timeframe, goals=""):
         """Generate a structured learning path using Gemini API"""
+        
+        if not self.model:
+            print("No API key - using fallback")
+            return self._create_fallback_path(topic, level, timeframe)
         
         prompt = f"""
         Create a detailed learning path for "{topic}" with the following requirements:
@@ -42,7 +55,7 @@ class LearningPathGenerator:
                 {{
                     "title": "Step name",
                     "description": "Detailed description of what to learn and do",
-                    "duration": "Time estimate (e.g., '3-4 days and also each day hours')",
+                    "duration": "Time estimate (e.g., '3-4 days')",
                     "resources": ["list", "of", "recommended", "resources"],
                     "key_concepts": ["concept1", "concept2", "concept3"],
                     "practical_tasks": ["task1", "task2"]
@@ -79,6 +92,9 @@ class LearningPathGenerator:
     
     def generate_quiz(self, topic, level, num_questions=5):
         """Generate a quiz based on the topic and level"""
+        
+        if not self.model:
+            return self._create_fallback_quiz(topic, level)
         
         prompt = f"""
         Create a quiz about "{topic}" for {level} level with {num_questions} questions.
@@ -145,6 +161,14 @@ class LearningPathGenerator:
                     "resources": ["Project ideas", "GitHub repos", "Community forums"],
                     "key_concepts": ["Project structure", "Real-world patterns", "Problem solving"],
                     "practical_tasks": ["Build portfolio project", "Deploy application", "Get feedback"]
+                },
+                {
+                    "title": "Advanced Topics",
+                    "description": f"Explore advanced {topic} features and best practices",
+                    "duration": "1 week",
+                    "resources": ["Advanced tutorials", "Expert blogs", "Documentation"],
+                    "key_concepts": ["Advanced patterns", "Performance", "Scalability"],
+                    "practical_tasks": ["Optimize projects", "Learn advanced features", "Mentor others"]
                 }
             ],
             "total_estimated_time": "40-60 hours",
@@ -159,7 +183,7 @@ class LearningPathGenerator:
                 "question": f"What is the most important first step when learning {topic}?",
                 "options": [
                     "Jump into advanced topics immediately",
-                    "Understand fundamentals and set up environment",
+                    "Understand fundamentals and set up environment properly",
                     "Memorize syntax without practice",
                     "Skip documentation completely"
                 ],
@@ -169,23 +193,52 @@ class LearningPathGenerator:
             {
                 "question": f"Which is the best approach for mastering {topic}?",
                 "options": [
-                    "Only read theory",
-                    "Only watch videos",
-                    "Combine theory with hands-on practice",
-                    "Copy code without understanding"
+                    "Only read theory without practicing",
+                    "Only watch videos without coding",
+                    "Combine theory with hands-on practice and projects",
+                    "Copy code without understanding the logic"
                 ],
                 "correct_answer": 2,
                 "explanation": "Combining theory with practice reinforces learning and builds practical skills"
+            },
+            {
+                "question": f"How can you effectively track your {topic} learning progress?",
+                "options": [
+                    "Only count study hours",
+                    "Build increasingly complex projects and measure understanding",
+                    "Just read about concepts without applying them",
+                    "Memorize definitions without practical use"
+                ],
+                "correct_answer": 1,
+                "explanation": "Building projects provides concrete evidence of skill development and understanding"
             }
         ]
 
 # Initialize the learning path generator
 generator = LearningPathGenerator()
 
-@app.route('/api/generate-learning-path', methods=['POST'])
+# Add OPTIONS handler for preflight requests
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "*")
+        response.headers.add('Access-Control-Allow-Methods', "*")
+        return response
+
+@app.route('/api/generate-learning-path', methods=['POST', 'OPTIONS'])
 def generate_learning_path():
     """API endpoint to generate learning path"""
     try:
+        # Handle preflight request
+        if request.method == 'OPTIONS':
+            response = jsonify({'message': 'OK'})
+            response.headers.add("Access-Control-Allow-Origin", "*")
+            response.headers.add('Access-Control-Allow-Headers', "Content-Type")
+            response.headers.add('Access-Control-Allow-Methods', "POST")
+            return response
+        
         data = request.get_json()
         
         # Validate required fields
@@ -196,6 +249,8 @@ def generate_learning_path():
         level = data.get('level', 'beginner')
         timeframe = data.get('timeframe', '1 month')
         goals = data.get('goals', '')
+        
+        print(f"Generating learning path for: {topic} ({level} level)")
         
         # Generate learning path
         learning_path = generator.generate_learning_path(topic, level, timeframe, goals)
@@ -223,71 +278,76 @@ def generate_learning_path():
             }
         }
         
-        return jsonify(response_data)
+        response = jsonify(response_data)
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
         
     except Exception as e:
         print(f"Error in generate_learning_path: {e}")
-        return jsonify({'error': 'Failed to generate learning path'}), 500
+        response = jsonify({'error': 'Failed to generate learning path', 'details': str(e)})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'Learning Assistant API is running'})
+    response = jsonify({
+        'status': 'healthy', 
+        'message': 'Learning Assistant API is running',
+        'has_api_key': bool(GEMINI_API_KEY)
+    })
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
 @app.route('/api/quiz-feedback', methods=['POST'])
 def quiz_feedback():
     """Provide detailed feedback on quiz answers"""
     try:
         data = request.get_json()
-        topic = data.get('topic')
+        topic = data.get('topic', 'programming')
         user_answers = data.get('answers', [])
         correct_answers = data.get('correct_answers', [])
         
-        # Generate personalized feedback using Gemini
-        prompt = f"""
-        Based on a {topic} quiz, provide personalized learning feedback.
+        score = sum(1 for i, ans in enumerate(user_answers) if i < len(correct_answers) and ans == correct_answers[i])
+        total = len(user_answers)
         
-        User got {sum(1 for i, ans in enumerate(user_answers) if ans == correct_answers[i])} out of {len(user_answers)} questions correct.
+        # Generate feedback
+        if score == total:
+            feedback = "Excellent work! You have a strong understanding of the concepts."
+        elif score >= total * 0.8:
+            feedback = "Great job! You're doing very well with most concepts."
+        elif score >= total * 0.6:
+            feedback = "Good progress! Review the areas where you missed questions."
+        else:
+            feedback = "Keep practicing! Focus on the fundamental concepts."
         
-        Provide a JSON response with:
-        {{
-            "overall_feedback": "General assessment and encouragement",
-            "strengths": ["areas where user performed well"],
-            "improvement_areas": ["concepts to focus on"],
-            "next_steps": ["specific recommendations for learning"],
-            "resources": ["recommended resources for improvement"]
-        }}
-        """
+        feedback_data = {
+            "overall_feedback": feedback,
+            "strengths": ["Completed the quiz"] if score > 0 else ["Attempted all questions"],
+            "improvement_areas": ["Review missed topics"] if score < total else ["Continue learning advanced topics"],
+            "next_steps": [f"Practice more {topic} exercises", "Build projects to reinforce learning"],
+            "resources": ["Official documentation", "Interactive tutorials", "Practice platforms"]
+        }
         
-        try:
-            response = model.generate_content(prompt)
-            text = response.text.strip()
-            json_match = re.search(r'\{.*\}', text, re.DOTALL)
-            
-            if json_match:
-                feedback_data = json.loads(json_match.group())
-            else:
-                feedback_data = {
-                    "overall_feedback": "Keep practicing to improve your understanding!",
-                    "strengths": ["Attempted all questions"],
-                    "improvement_areas": ["Review core concepts"],
-                    "next_steps": ["Practice more exercises", "Review documentation"],
-                    "resources": ["Official tutorials", "Practice platforms"]
-                }
-        except:
-            feedback_data = {
-                "overall_feedback": "Keep practicing to improve your understanding!",
-                "strengths": ["Attempted all questions"],
-                "improvement_areas": ["Review core concepts"],
-                "next_steps": ["Practice more exercises"],
-                "resources": ["Official tutorials"]
-            }
-        
-        return jsonify({'success': True, 'feedback': feedback_data})
+        response = jsonify({'success': True, 'feedback': feedback_data})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
         
     except Exception as e:
         print(f"Error generating feedback: {e}")
-        return jsonify({'error': 'Failed to generate feedback'}), 500
+        response = jsonify({'error': 'Failed to generate feedback'})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 500
+
+# Root route for testing
+@app.route('/')
+def home():
+    return jsonify({
+        'message': 'AI Learning Assistant API',
+        'status': 'running',
+        'endpoints': ['/api/health', '/api/generate-learning-path', '/api/quiz-feedback']
+    })
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
