@@ -55,7 +55,7 @@ class LearningPathGenerator:
                 {{
                     "title": "Step name",
                     "description": "Detailed description of what to learn and do",
-                    "duration": "Time estimate (e.g., '3-4 days')",
+                    "duration": "Time estimate (e.g., '3-4 days and also each day hours')",
                     "resources": ["list", "of", "recommended", "resources"],
                     "key_concepts": ["concept1", "concept2", "concept3"],
                     "practical_tasks": ["task1", "task2"]
@@ -351,3 +351,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
